@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Collaborative Form</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    input, select { margin-bottom: 10px; display: block; padding: 8px; width: 300px; }
+    .locked { background-color: #f8d7da; }
+    #saveBtn { padding: 10px 20px; font-size: 16px; margin-top: 20px; }
+    #saveMsg { margin-top: 10px; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h2>Live Collaborative Form</h2>
+  <div id="form"></div>
+
+  <!-- ✅ Save Button -->
+  <button id="saveBtn">💾 Save Response to Database</button>
+  <p id="saveMsg"></p>
+
+  <!-- ✅ Socket.IO client script -->
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+
+  <script>
+    const socket = io("http://localhost:3000");
+
+    const formCode = prompt("Enter Form Code:");
+    const userId = Math.random().toString(36).substring(2, 8); // Temporary user ID
+    const formContainer = document.getElementById("form");
+
+    let fieldElements = {};
+
+    // ✅ Fetch form structure from backend
+    fetch(`http://localhost:3000/forms/${formCode}`)
+      .then(res => res.json())
+      .then(data => {
+        const fields = data.fields;
+
+        fields.forEach(field => {
+          let input;
+
+          if (field.type === "text" || field.type === "number") {
+            input = document.createElement("input");
+            input.type = field.type;
+          } else if (field.type === "dropdown") {
+            input = document.createElement("select");
+
+            console.log("Rendering dropdown options for:", field.label, field.options);
+
+            if (Array.isArray(field.options)) {
+              field.options.forEach(opt => {
+                const option = document.createElement("option");
+                option.value = opt;
+                option.text = opt;
+                input.appendChild(option);
+              });
+            } else {
+              console.warn("❗ field.options is not an array:", field.options);
+            }
+          }
+
+          input.id = field.field_name;
+          input.placeholder = field.label;
+
+          input.addEventListener("focus", () => {
+            socket.emit("lockField", { formCode, fieldName: field.field_name, userId });
+          });
+
+          input.addEventListener("blur", () => {
+            socket.emit("unlockField", { formCode, fieldName: field.field_name, userId });
+          });
+
+          input.addEventListener("input", () => {
+            socket.emit("editField", {
+              formCode,
+              fieldName: field.field_name,
+              value: input.value
+            });
+          });
+
+          fieldElements[field.field_name] = input;
+          formContainer.appendChild(input);
+        });
+
+        socket.emit("joinForm", formCode);
+      });
+
+    // ✅ Listen for real-time state updates
+    socket.on("formState", (data) => {
+      Object.entries(data).forEach(([fieldName, value]) => {
+        if (fieldElements[fieldName]) {
+          fieldElements[fieldName].value = value;
+        }
+      });
+    });
+
+    socket.on("formUpdate", ({ fieldName, value }) => {
+      if (fieldElements[fieldName]) {
+        fieldElements[fieldName].value = value;
+      }
+    });
+
+    socket.on("fieldLocked", ({ fieldName }) => {
+      if (fieldElements[fieldName]) {
+        fieldElements[fieldName].disabled = true;
+        fieldElements[fieldName].classList.add("locked");
+      }
+    });
+
+    socket.on("fieldUnlocked", ({ fieldName }) => {
+      if (fieldElements[fieldName]) {
+        fieldElements[fieldName].disabled = false;
+        fieldElements[fieldName].classList.remove("locked");
+      }
+    });
+
+    // ✅ Manual Save Button Logic
+    document.getElementById("saveBtn").addEventListener("click", async () => {
+      try {
+        const res = await fetch(`http://localhost:3000/forms/${formCode}/response`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" }
+        });
+
+        const result = await res.json();
+        document.getElementById("saveMsg").innerText = result.message || "✅ Saved!";
+      } catch (err) {
+        document.getElementById("saveMsg").innerText = "❌ Save failed";
+        console.error("Save error:", err);
+      }
+    });
+  </script>
+</body>
+</html>
